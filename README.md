@@ -12,13 +12,7 @@
 ## Быстрый старт
 
 ```bash
-<<<<<<< Updated upstream
-git clone https://github.com/lifeindarkside/Remnawave-Routing-update
-cd Remnawave-Routing-update
-cp .env.example .env
-=======
 mkdir remna-routing-updater && cd remna-routing-updater
->>>>>>> Stashed changes
 ```
 
 Создайте файл `.env`:
@@ -55,7 +49,8 @@ git clone https://github.com/lifeindarkside/Remnawave-Routing-update.git
 cd Remnawave-Routing-update
 cp .env.example .env
 # отредактируйте .env
-docker compose up -d --build
+docker build -t remna-routing-updater .
+docker compose up -d
 ```
 
 ## Переменные окружения
