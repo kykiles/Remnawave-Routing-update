@@ -12,21 +12,49 @@
 ## Быстрый старт
 
 ```bash
+<<<<<<< Updated upstream
 git clone https://github.com/lifeindarkside/Remnawave-Routing-update
 cd Remnawave-Routing-update
 cp .env.example .env
+=======
+mkdir remna-routing-updater && cd remna-routing-updater
+>>>>>>> Stashed changes
 ```
 
-Отредактируйте `.env`, указав свои значения:
+Создайте файл `.env`:
 
 ```env
 REMNA_BASE_URL=https://your-host/api
 REMNA_TOKEN=your_bearer_token
 ```
 
+Создайте файл `docker-compose.yml`:
+
+```yaml
+services:
+  routing-updater:
+    image: ghcr.io/lifeindarkside/remnawave-routing-update:latest
+    container_name: remna-routing-updater
+    restart: unless-stopped
+    env_file:
+      - .env
+```
+
 Запуск:
 
 ```bash
+docker compose up -d
+```
+
+### Сборка из исходников
+
+Если хотите собрать образ самостоятельно:
+
+```bash
+git clone https://github.com/lifeindarkside/Remnawave-Routing-update.git
+cd Remnawave-Routing-update
+cp .env.example .env
+# отредактируйте .env
 docker compose up -d --build
 ```
 
