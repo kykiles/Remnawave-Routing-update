@@ -1,8 +1,13 @@
-import os
-import time
+import asyncio
+import base64
+import json
 import logging
-import requests
-import urllib3
+import os
+
+import aiohttp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,92 +15,133 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-REMNA_BASE_URL = os.environ["REMNA_BASE_URL"].rstrip("/")
-REMNA_API_URL = f"{REMNA_BASE_URL}/subscription-settings"
-REMNA_TOKEN = os.environ["REMNA_TOKEN"]
-GITHUB_RAW_URL = os.environ.get(
+REMNA_BASE_URL = os.getenv("REMNA_BASE_URL", "").rstrip("/")
+REMNA_TOKEN = os.getenv("REMNA_TOKEN", "")
+GITHUB_RAW_URL = os.getenv(
     "GITHUB_RAW_URL",
-    "https://raw.githubusercontent.com/hydraponique/roscomvpn-happ-routing/refs/heads/main/HAPP/DEFAULT.DEEPLINK",
+    "https://raw.githubusercontent.com/hydraponique/roscomvpn-happ-routing"
+    "/refs/heads/main/HAPP/DEFAULT.DEEPLINK",
 )
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))  # seconds
-SSL_VERIFY = REMNA_BASE_URL.startswith("https://")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "43200"))
 
-REMNA_HEADERS = {
-    "Accept": "application/json",
-    "Authorization": f"Bearer {REMNA_TOKEN}",
-}
-
-if not SSL_VERIFY:
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    REMNA_HEADERS["X-Forwarded-Proto"] = "https"
-    REMNA_HEADERS["X-Forwarded-For"] = "127.0.0.1"
+# ── Настройки патча ──────────────────────────────────────────────────────────
+ROUTING_NAME = os.getenv("ROUTING_NAME", "Glowshine")
+FAKE_DNS = os.getenv("FAKE_DNS", "true").lower() == "true"
+# ────────────────────────────────────────────────────────────────────────────
 
 
-def get_remna_settings() -> dict:
-    resp = requests.get(
-        REMNA_API_URL,
-        headers=REMNA_HEADERS,
-        timeout=30,
-        verify=SSL_VERIFY,
+def patch_deeplink(raw_deeplink: str) -> str:
+    """
+    Принимает happ://routing/onadd/<base64>,
+    декодирует JSON, применяет патч, возвращает новый deeplink.
+    """
+    prefix = "happ://routing/onadd/"
+    if not raw_deeplink.startswith(prefix):
+        log.warning("Неожиданный формат deeplink, патч пропущен.")
+        return raw_deeplink
+
+    b64_part = raw_deeplink[len(prefix):]
+
+    # base64 может быть без padding — добавляем
+    padding = 4 - len(b64_part) % 4
+    if padding != 4:
+        b64_part += "=" * padding
+
+    try:
+        payload = json.loads(base64.b64decode(b64_part).decode("utf-8"))
+    except Exception as e:
+        log.error("Не удалось декодировать payload: %s", e)
+        return raw_deeplink
+
+    # ── применяем изменения ──────────────────────────────────────────────────
+    original_name = payload.get("Name", "")
+    payload["Name"] = ROUTING_NAME
+    payload.pop("FakeDns", None)  # убираем неправильный ключ если есть
+    payload["FakeDNS"] = "true" if FAKE_DNS else "false"  # правильный ключ, строка
+    # ────────────────────────────────────────────────────────────────────────
+
+    log.info(
+        "Патч: Name '%s' → '%s', FakeDNS → %s",
+        original_name, ROUTING_NAME, payload["FakeDNS"],
     )
-    resp.raise_for_status()
-    return resp.json()
+
+    new_b64 = base64.b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+
+    return f"{prefix}{new_b64}"
 
 
-def patch_remna_settings(payload: dict) -> dict:
-    resp = requests.patch(
-        REMNA_API_URL,
-        headers={**REMNA_HEADERS, "Content-Type": "application/json"},
-        json=payload,
-        timeout=30,
-        verify=SSL_VERIFY,
-    )
-    resp.raise_for_status()
-    return resp.json()
+async def fetch_deeplink(session: aiohttp.ClientSession) -> str | None:
+    try:
+        async with session.get(GITHUB_RAW_URL) as resp:
+            resp.raise_for_status()
+            return (await resp.text()).strip()
+    except Exception as e:
+        log.error("Ошибка получения deeplink с GitHub: %s", e)
+        return None
 
 
-def get_github_deeplink() -> str:
-    resp = requests.get(GITHUB_RAW_URL, timeout=30)
-    resp.raise_for_status()
-    return resp.text.strip()
+async def get_current_routing(session: aiohttp.ClientSession) -> str | None:
+    url = f"{REMNA_BASE_URL}/subscription-settings"
+    headers = {"Authorization": f"Bearer {REMNA_TOKEN}"}
+    try:
+        async with session.get(url, headers=headers) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            return data.get("response", {}).get("happRouting")
+    except Exception as e:
+        log.error("Ошибка получения настроек Remna: %s", e)
+        return None
 
 
-def main():
-    log.info("Starting routing update monitor")
-    log.info("Remna API: %s", REMNA_API_URL)
-    log.info("GitHub URL: %s", GITHUB_RAW_URL)
-    log.info("Check interval: %ds", CHECK_INTERVAL)
+async def update_routing(session: aiohttp.ClientSession, deeplink: str) -> bool:
+    url = f"{REMNA_BASE_URL}/subscription-settings"
+    headers = {
+        "Authorization": f"Bearer {REMNA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with session.patch(
+            url,
+            headers=headers,
+            json={
+                "uuid": "00000000-0000-0000-0000-000000000000",
+                "happRouting": deeplink,
+            },
+        ) as resp:
+            resp.raise_for_status()
+            return True
+    except Exception as e:
+        log.error("Ошибка обновления Remna: %s", e)
+        return False
 
-    # Fetch current settings on startup
-    settings = get_remna_settings()
-    data = settings.get("response", settings)
-    settings_uuid = data["uuid"]
-    current_routing = data.get("happRouting", "") or ""
-    log.info("Settings UUID: %s", settings_uuid)
-    log.info("Current happRouting loaded (%d chars)", len(current_routing))
 
-    while True:
-        try:
-            github_deeplink = get_github_deeplink()
-            log.info("Fetched GitHub deeplink (%d chars)", len(github_deeplink))
+async def main() -> None:
+    if not REMNA_BASE_URL or not REMNA_TOKEN:
+        raise SystemExit("REMNA_BASE_URL и REMNA_TOKEN обязательны")
 
-            if github_deeplink != current_routing:
-                log.info("Routing changed! Updating Remna...")
-                result = patch_remna_settings({
-                    "uuid": settings_uuid,
-                    "happRouting": github_deeplink,
-                })
-                current_routing = github_deeplink
-                log.info("Successfully updated happRouting in Remna")
-                log.debug("Patch response: %s", result)
-            else:
-                log.info("No changes detected")
+    log.info("Запуск. Интервал проверки: %ds", CHECK_INTERVAL)
+    log.info("Routing name: '%s', FakeDNS: %s", ROUTING_NAME, FAKE_DNS)
 
-        except Exception:
-            log.exception("Error during check cycle")
+    async with aiohttp.ClientSession() as session:
+        while True:
+            raw = await fetch_deeplink(session)
+            if raw:
+                patched = patch_deeplink(raw)
+                current = await get_current_routing(session)
 
-        time.sleep(CHECK_INTERVAL)
+                if patched != current:
+                    ok = await update_routing(session, patched)
+                    if ok:
+                        log.info("Routing обновлён успешно.")
+                    else:
+                        log.warning("Обновление не удалось.")
+                else:
+                    log.info("Изменений нет.")
+
+            await asyncio.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
