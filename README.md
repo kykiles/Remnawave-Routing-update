@@ -1,112 +1,127 @@
-# Remna Routing Updater
+# Remnawave Routing Updater (patched)
 
-Микросервис для автоматического обновления `happRouting` в Remna панели при появлении новых данных в GitHub-репозитории [roscomvpn-happ-routing](https://github.com/hydraponique/roscomvpn-happ-routing).
+Форк [lifeindarkside/Remnawave-Routing-update](https://github.com/lifeindarkside/Remnawave-Routing-update).
+
+Микросервис автоматически подтягивает маршруты для Happ из репозитория [hydraponique/roscomvpn-happ-routing](https://github.com/hydraponique/roscomvpn-happ-routing) и применяет их в Remnawave панели.
+
+**Отличия от оригинала:**
+- Название маршрута задаётся через `.env` переменную `ROUTING_NAME`
+- `FakeDNS` задаётся через `.env` переменную `FAKE_DNS`
+- Все правила маршрутизации берутся из оригинального источника без изменений
+
+---
 
 ## Как работает
 
-1. При запуске получает текущие настройки подписки из Remna API (`GET /subscription-settings`)
-2. Периодически проверяет файл `DEFAULT.DEEPLINK` в GitHub-репозитории
-3. Если содержимое изменилось — отправляет обновление в Remna (`PATCH /subscription-settings`)
-4. Если изменений нет — ничего не делает
+1. Каждые N секунд скачивает файл `DEFAULT.DEEPLINK` с GitHub
+2. Декодирует base64 → JSON
+3. Применяет патч: меняет `Name` и `FakeDNS`
+4. Если содержимое изменилось — отправляет `PATCH /subscription-settings` в Remnawave API
+5. Если изменений нет — ничего не делает
+
+---
 
 ## Быстрый старт
 
-```bash
-mkdir remna-routing-updater && cd remna-routing-updater
-```
-
-### Внешняя панель (HTTPS)
-
-Создайте файл `.env`:
-
-```env
-REMNA_BASE_URL=https://your-host/api
-REMNA_TOKEN=your_bearer_token
-# GITHUB_RAW_URL=https://raw.githubusercontent.com/hydraponique/roscomvpn-happ-routing/refs/heads/main/HAPP/DEFAULT.DEEPLINK
-# CHECK_INTERVAL=300
-```
-
-Создайте файл `docker-compose.yml`:
-
-```yaml
-services:
-  routing-updater:
-    image: ghcr.io/lifeindarkside/remnawave-routing-update:latest
-    container_name: remna-routing-updater
-    restart: unless-stopped
-    env_file:
-      - .env
-```
-
-### Локальная панель (Docker)
-
-Если RemnaWave панель запущена локально в Docker (образ `remnawave/backend:latest`), контейнер updater нужно подключить к той же сети `remnawave-network` и обращаться к панели по имени контейнера.
-
-Создайте файл `.env`:
-
-```env
-REMNA_BASE_URL=http://remnawave-backend:3000/api
-REMNA_TOKEN=your_bearer_token
-# GITHUB_RAW_URL=https://raw.githubusercontent.com/hydraponique/roscomvpn-happ-routing/refs/heads/main/HAPP/DEFAULT.DEEPLINK
-# CHECK_INTERVAL=300
-```
-
-> `remnawave-backend` — имя контейнера панели, `3000` — порт по умолчанию. Измените при необходимости.
-
-Создайте файл `docker-compose.yml`:
-
-```yaml
-services:
-  routing-updater:
-    image: ghcr.io/lifeindarkside/remnawave-routing-update:latest
-    container_name: remna-routing-updater
-    restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - remnawave-network
-
-networks:
-  remnawave-network:
-    name: remnawave-network
-    external: true
-```
-
-> Сеть `remnawave-network` должна уже существовать (создаётся docker-compose панели RemnaWave).
-
-Запуск:
+### 1. Создай директорию и клонируй репо
 
 ```bash
-docker compose up -d
+mkdir -p /opt/remna-routing-updater
+cd /opt/remna-routing-updater
+git clone https://github.com/ТВО_НИК/Remnawave-Routing-update.git .
 ```
 
-### Сборка из исходников
+### 2. Получи API-токен Remnawave
 
-Если хотите собрать образ самостоятельно:
+Remnawave панель → **Settings → API Tokens → Create Token**
+
+Скопируй токен — он показывается только один раз.
+
+### 3. Создай `.env`
 
 ```bash
-git clone https://github.com/lifeindarkside/Remnawave-Routing-update.git
-cd Remnawave-Routing-update
 cp .env.example .env
-# отредактируйте .env
-docker build -t remna-routing-updater .
+nano .env
+```
+
+```env
+REMNA_BASE_URL=https://твой-домен/api
+REMNA_TOKEN=вставь_токен_сюда
+
+ROUTING_NAME=МоёНазвание
+FAKE_DNS=true
+```
+
+### 4. Запусти
+
+```bash
+docker compose build
 docker compose up -d
 ```
+
+### 5. Проверь логи
+
+```bash
+docker compose logs -f
+```
+
+Нормальный вывод:
+```
+[INFO] Запуск. Интервал проверки: 43200s
+[INFO] Routing name: 'МоёНазвание', FakeDns: True
+[INFO] Патч: Name 'RoscomVPN' → 'МоёНазвание', FakeDns → True
+[INFO] Routing обновлён успешно.
+```
+
+---
 
 ## Переменные окружения
 
 | Переменная | Обязательная | По умолчанию | Описание |
 |---|---|---|---|
-| `REMNA_BASE_URL` | да | — | Базовый URL API Remna (например `https://host/api` или `http://remnawave-backend:3000/api`) |
-| `REMNA_TOKEN` | да | — | Bearer-токен для авторизации в Remna API |
-| `GITHUB_RAW_URL` | нет | [DEFAULT.DEEPLINK](https://raw.githubusercontent.com/hydraponique/roscomvpn-happ-routing/refs/heads/main/HAPP/DEFAULT.DEEPLINK) | URL файла с роутингом на GitHub |
-| `CHECK_INTERVAL` | нет | `300` | Интервал проверки обновлений (в секундах) |
+| `REMNA_BASE_URL` | ✅ | — | `https://твой-домен/api` |
+| `REMNA_TOKEN` | ✅ | — | Bearer-токен Remnawave |
+| `ROUTING_NAME` | ❌ | `Glowshine` | Название маршрута в Happ |
+| `FAKE_DNS` | ❌ | `true` | Включить FakeDNS |
+| `GITHUB_RAW_URL` | ❌ | DEFAULT.DEEPLINK из roscomvpn-happ-routing | Кастомный источник маршрутов |
+| `CHECK_INTERVAL` | ❌ | `43200` | Интервал проверки в секундах (43200 = 2 раза в сутки) |
 
-## Логи
+---
+
+## Изменить настройки без пересборки
 
 ```bash
-docker compose logs -f
+nano .env          # изменяешь нужные переменные
+docker compose restart
 ```
+
+---
+
+## Проверить что маршрут применился
+
+```bash
+curl -s \
+  -H "Authorization: Bearer ВАШ_ТОКЕН" \
+  https://твой-домен/api/subscription-settings \
+  | python3 -c "
+import sys, json, base64
+data = json.load(sys.stdin)
+hr = data['response']['happRouting']
+b64 = hr.split('/')[-1]
+b64 += '=' * (4 - len(b64) % 4)
+decoded = json.loads(base64.b64decode(b64))
+print('Name:', decoded.get('Name'))
+print('FakeDNS:', decoded.get('FakeDNS'))
+"
+```
+
+---
+
+## На какой сервер деплоить
+
+На сервер с **панелью** Remnawave. `REMNA_BASE_URL` должен указывать на домен панели, не ноды.
+
+---
 
 ## Лицензия
 
