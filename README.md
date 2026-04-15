@@ -28,7 +28,7 @@
 ```bash
 mkdir -p /opt/remna-routing-updater
 cd /opt/remna-routing-updater
-git clone https://github.com/ТВО_НИК/Remnawave-Routing-update.git .
+git clone https://github.com/kykiles/Remnawave-Routing-update.git .
 ```
 
 ### 2. Получи API-токен Remnawave
@@ -81,7 +81,7 @@ docker compose logs -f
 |---|---|---|---|
 | `REMNA_BASE_URL` | ✅ | — | `https://твой-домен/api` |
 | `REMNA_TOKEN` | ✅ | — | Bearer-токен Remnawave |
-| `ROUTING_NAME` | ❌ | `Glowshine` | Название маршрута в Happ |
+| `ROUTING_NAME` | ❌ | `routing_name` | Название маршрута в Happ |
 | `FAKE_DNS` | ❌ | `true` | Включить FakeDNS |
 | `GITHUB_RAW_URL` | ❌ | DEFAULT.DEEPLINK из roscomvpn-happ-routing | Кастомный источник маршрутов |
 | `CHECK_INTERVAL` | ❌ | `43200` | Интервал проверки в секундах (43200 = 2 раза в сутки) |
