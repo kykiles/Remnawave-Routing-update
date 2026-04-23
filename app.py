@@ -16,73 +16,87 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 REMNA_BASE_URL = os.getenv("REMNA_BASE_URL", "").rstrip("/")
-REMNA_TOKEN = os.getenv("REMNA_TOKEN", "")
+REMNA_TOKEN    = os.getenv("REMNA_TOKEN", "")
 GITHUB_RAW_URL = os.getenv(
     "GITHUB_RAW_URL",
-    "https://raw.githubusercontent.com/hydraponique/roscomvpn-happ-routing"
-    "/refs/heads/main/HAPP/DEFAULT.DEEPLINK",
+    "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing"
+    "/refs/heads/main/HAPP/DEFAULT.JSON",
 )
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "43200"))
 
-# ── Настройки патча ──────────────────────────────────────────────────────────
+# ── Настройки патча ───────────────────────────────────────────────────────────
 ROUTING_NAME = os.getenv("ROUTING_NAME", "Glowshine")
-FAKE_DNS = os.getenv("FAKE_DNS", "true").lower() == "true"
-# ────────────────────────────────────────────────────────────────────────────
+FAKE_DNS     = os.getenv("FAKE_DNS", "true").lower() == "true"
+
+# Дополнительные правила — перечисляются через запятую в .env
+# EXTRA_PROXY=domain:gemini.google.com,domain:generativelanguage.googleapis.com
+# EXTRA_DIRECT=domain:mysite.ru
+# EXTRA_BLOCK=domain:ads.example.com
+def _parse_list(env_key: str) -> list:
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+EXTRA_PROXY  = _parse_list("EXTRA_PROXY")
+EXTRA_DIRECT = _parse_list("EXTRA_DIRECT")
+EXTRA_BLOCK  = _parse_list("EXTRA_BLOCK")
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def patch_deeplink(raw_deeplink: str) -> str:
-    """
-    Принимает happ://routing/onadd/<base64>,
-    декодирует JSON, применяет патч, возвращает новый deeplink.
-    """
-    prefix = "happ://routing/onadd/"
-    if not raw_deeplink.startswith(prefix):
-        log.warning("Неожиданный формат deeplink, патч пропущен.")
-        return raw_deeplink
+def build_deeplink(payload: dict) -> str:
+    b64 = base64.b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    return f"happ://routing/onadd/{b64}"
 
-    b64_part = raw_deeplink[len(prefix):]
 
-    # base64 может быть без padding — добавляем
-    padding = 4 - len(b64_part) % 4
-    if padding != 4:
-        b64_part += "=" * padding
-
-    try:
-        payload = json.loads(base64.b64decode(b64_part).decode("utf-8"))
-    except Exception as e:
-        log.error("Не удалось декодировать payload: %s", e)
-        return raw_deeplink
-
-    # ── применяем изменения ──────────────────────────────────────────────────
+def patch_payload(payload: dict) -> dict:
     original_name = payload.get("Name", "")
+
+    # Основной патч
     payload["Name"] = ROUTING_NAME
-    payload.pop("FakeDns", None)  # убираем неправильный ключ если есть
-    payload["FakeDNS"] = "true" if FAKE_DNS else "false"  # правильный ключ, строка
-    # ────────────────────────────────────────────────────────────────────────
+    payload.pop("FakeDns", None)
+    payload["FakeDNS"] = "true" if FAKE_DNS else "false"
+
+    # Дополнительные правила — добавляем без дублей
+    for site in EXTRA_PROXY:
+        if site not in payload.get("ProxySites", []):
+            payload.setdefault("ProxySites", []).append(site)
+
+    for site in EXTRA_DIRECT:
+        if site not in payload.get("DirectSites", []):
+            payload.setdefault("DirectSites", []).append(site)
+
+    for site in EXTRA_BLOCK:
+        if site not in payload.get("BlockSites", []):
+            payload.setdefault("BlockSites", []).append(site)
 
     log.info(
         "Патч: Name '%s' → '%s', FakeDNS → %s",
         original_name, ROUTING_NAME, payload["FakeDNS"],
     )
+    if EXTRA_PROXY:
+        log.info("  + ProxySites: %s", ", ".join(EXTRA_PROXY))
+    if EXTRA_DIRECT:
+        log.info("  + DirectSites: %s", ", ".join(EXTRA_DIRECT))
+    if EXTRA_BLOCK:
+        log.info("  + BlockSites: %s", ", ".join(EXTRA_BLOCK))
 
-    new_b64 = base64.b64encode(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    ).decode().rstrip("=")
-
-    return f"{prefix}{new_b64}"
+    return payload
 
 
-async def fetch_deeplink(session: aiohttp.ClientSession) -> str | None:
+async def fetch_routing_json(session: aiohttp.ClientSession) -> dict:
     try:
         async with session.get(GITHUB_RAW_URL) as resp:
             resp.raise_for_status()
-            return (await resp.text()).strip()
+            return await resp.json(content_type=None)
     except Exception as e:
-        log.error("Ошибка получения deeplink с GitHub: %s", e)
+        log.error("Ошибка получения JSON с GitHub: %s", e)
         return None
 
 
-async def get_current_routing(session: aiohttp.ClientSession) -> str | None:
+async def get_current_routing(session: aiohttp.ClientSession) -> str:
     url = f"{REMNA_BASE_URL}/subscription-settings"
     headers = {"Authorization": f"Bearer {REMNA_TOKEN}"}
     try:
@@ -126,13 +140,15 @@ async def main() -> None:
 
     async with aiohttp.ClientSession() as session:
         while True:
-            raw = await fetch_deeplink(session)
-            if raw:
-                patched = patch_deeplink(raw)
-                current = await get_current_routing(session)
+            payload = await fetch_routing_json(session)
 
-                if patched != current:
-                    ok = await update_routing(session, patched)
+            if payload:
+                payload  = patch_payload(payload)
+                deeplink = build_deeplink(payload)
+                current  = await get_current_routing(session)
+
+                if deeplink != current:
+                    ok = await update_routing(session, deeplink)
                     if ok:
                         log.info("Routing обновлён успешно.")
                     else:
