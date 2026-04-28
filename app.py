@@ -42,20 +42,6 @@ EXTRA_PROXY  = _parse_list("EXTRA_PROXY")
 EXTRA_DIRECT = _parse_list("EXTRA_DIRECT")
 EXTRA_BLOCK  = _parse_list("EXTRA_BLOCK")
 
-# Фрагментация пакетов (обход DPI)
-FRAGMENT_ENABLE   = os.getenv("FRAGMENT_ENABLE", "true").lower() == "true"
-FRAGMENT_PACKETS  = os.getenv("FRAGMENT_PACKETS", "tlshello")
-FRAGMENT_LENGTH   = os.getenv("FRAGMENT_LENGTH", "50-100")
-FRAGMENT_INTERVAL = os.getenv("FRAGMENT_INTERVAL", "5")
-FRAGMENT_MAXSPLIT = os.getenv("FRAGMENT_MAXSPLIT", "100-200")
-
-# Шум (маскировка трафика)
-NOISE_ENABLE      = os.getenv("NOISE_ENABLE", "true").lower() == "true"
-NOISE_PACKET_TYPE = os.getenv("NOISE_PACKET_TYPE", "base64")
-NOISE_PACKET      = os.getenv("NOISE_PACKET", "7nQBAAABAAAAAAAABnQtcmluZwZtc2VkZ2UDbmV0AAABAAE=")
-NOISE_DELAY       = os.getenv("NOISE_DELAY", "50")
-NOISE_RAND        = os.getenv("NOISE_RAND", "1-1024")
-NOISE_RAND_RANGE  = os.getenv("NOISE_RAND_RANGE", "0-255")
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -87,35 +73,9 @@ def patch_payload(payload: dict) -> dict:
         if site not in payload.get("BlockSites", []):
             payload.setdefault("BlockSites", []).append(site)
 
-    # Фрагментация
-    payload["fragmentation-enable"] = "true" if FRAGMENT_ENABLE else "false"
-    if FRAGMENT_ENABLE:
-        payload["fragmentation-packets"]  = FRAGMENT_PACKETS
-        payload["fragmentation-length"]   = FRAGMENT_LENGTH
-        payload["fragmentation-interval"] = FRAGMENT_INTERVAL
-        payload["fragmentation-maxsplit"] = FRAGMENT_MAXSPLIT
-    else:
-        for key in ("fragmentation-packets", "fragmentation-length",
-                    "fragmentation-interval", "fragmentation-maxsplit"):
-            payload.pop(key, None)
-
-    # Шум
-    payload["noises-enable"] = "true" if NOISE_ENABLE else "false"
-    if NOISE_ENABLE:
-        payload["noises-packet-type"] = NOISE_PACKET_TYPE
-        payload["noises-packet"]      = NOISE_PACKET
-        payload["noises-delay"]       = NOISE_DELAY
-        payload["noises-rand"]        = NOISE_RAND
-        payload["noises-rand-range"]  = NOISE_RAND_RANGE
-    else:
-        for key in ("noises-packet-type", "noises-packet", "noises-delay",
-                    "noises-rand", "noises-rand-range"):
-            payload.pop(key, None)
-
     log.info(
-        "Патч: Name '%s' → '%s', FakeDNS → %s, Fragment → %s, Noise → %s",
+        "Патч: Name '%s' → '%s', FakeDNS → %s",
         original_name, ROUTING_NAME, payload["FakeDNS"],
-        FRAGMENT_ENABLE, NOISE_ENABLE,
     )
     if EXTRA_PROXY:
         log.info("  + ProxySites: %s", ", ".join(EXTRA_PROXY))
@@ -178,7 +138,6 @@ async def main() -> None:
 
     log.info("Запуск. Интервал проверки: %ds", CHECK_INTERVAL)
     log.info("Routing name: '%s', FakeDNS: %s", ROUTING_NAME, FAKE_DNS)
-    log.info("Fragment: %s, Noise: %s", FRAGMENT_ENABLE, NOISE_ENABLE)
 
     async with aiohttp.ClientSession() as session:
         while True:
