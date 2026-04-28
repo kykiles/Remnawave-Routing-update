@@ -88,7 +88,7 @@ def patch_payload(payload: dict) -> dict:
             payload.setdefault("BlockSites", []).append(site)
 
     # Фрагментация
-    payload["fragmentation-enable"] = FRAGMENT_ENABLE
+    payload["fragmentation-enable"] = "true" if FRAGMENT_ENABLE else "false"
     if FRAGMENT_ENABLE:
         payload["fragmentation-packets"]  = FRAGMENT_PACKETS
         payload["fragmentation-length"]   = FRAGMENT_LENGTH
@@ -100,7 +100,7 @@ def patch_payload(payload: dict) -> dict:
             payload.pop(key, None)
 
     # Шум
-    payload["noises-enable"] = NOISE_ENABLE
+    payload["noises-enable"] = "true" if NOISE_ENABLE else "false"
     if NOISE_ENABLE:
         payload["noises-packet-type"] = NOISE_PACKET_TYPE
         payload["noises-packet"]      = NOISE_PACKET
